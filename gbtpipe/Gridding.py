@@ -12,7 +12,7 @@ import astropy.units as u
 import astropy.constants as con
 import numpy.polynomial.legendre as legendre
 import warnings
-import Baseline
+from .Baseline import *
 import os
 from spectral_cube import SpectralCube
 from radio_beam import Beam
@@ -99,7 +99,7 @@ def postConvolve(filein, bmaj=None, bmin=None,
 
     targetBeam = Beam(bmaj, bmin, bpa)
     newcube = cube.convolve_to(targetBeam)
-    newcube.write(fileout, overwrite=True)
+    newcube.write(fileout, clobber=True)
     
 def mad1d(x):
     med0 = np.median(x)
@@ -268,6 +268,7 @@ def addHeader_nonStd(hdr, beamSize, sample):
 
     bunit_dict = {'Tmb':'K',
                   'Ta*':'K',
+                  'Ta':'K',
                   'Counts':'Counts'}
     inst_dict = {'RcvrArray75_115':'ARGUS',
                  'RcvrArray18_26':'KFPA',
@@ -306,7 +307,8 @@ def griddata(filelist,
              outdir=None, 
              outname=None,
              dtype=np.float64,
-	     flagSpatialOutlier=False
+             flagSpatialOutlier=False,
+             gainDict=None,
              **kwargs):
 
     """Gridding code for GBT spectral scan data produced by pipeline.
@@ -397,9 +399,13 @@ def griddata(filelist,
 
     flagSpatialOutlier : bool
         Setting to True will remove scans with positions far outside the 
-	bounding box of the regular scan pattern. Used to catch instances
-	where the encoder records erroneous positions. 
+        bounding box of the regular scan pattern. Used to catch instances
+        where the encoder records erroneous positions. 
 
+    gainDict : dict 
+        Dictionary that has a tuple of feed and polarization numbers
+        as keys and returns the gain values for that feed.
+    
     Returns
     -------
     None
@@ -407,7 +413,7 @@ def griddata(filelist,
     """
 
     eulerFlag = False
-    print "Starting Gridding"
+    print("Starting Gridding")
     if outdir is None:
         outdir = os.getcwd()
 
@@ -513,12 +519,12 @@ def griddata(filelist,
     for thisfile in filelist:
         ctr += 1
         s = fits.open(thisfile)
-	if flagSpatialOutlier:
-		# Remove outliers in Lat/Lon space
-		f = np.where(is_outlier(s[1].data['CRVAL2'], thresh=1.5)!=True)
-		s[1].data = s[1].data[f]
-		f = np.where(is_outlier(s[1].data['CRVAL3'], thresh=1.5)!=True)
-		s[1].data = s[1].data[f]
+        if flagSpatialOutlier:
+                # Remove outliers in Lat/Lon space
+                f = np.where(is_outlier(s[1].data['CRVAL2'], thresh=1.5)!=True)
+                s[1].data = s[1].data[f]
+                f = np.where(is_outlier(s[1].data['CRVAL3'], thresh=1.5)!=True)
+                s[1].data = s[1].data[f]
         print("Now processing {0}".format(thisfile))
         print("This is file {0} of {1}".format(ctr, len(filelist)))
         if len(s[1].data) == 0:
@@ -588,6 +594,11 @@ def griddata(filelist,
                                             for ss in baselineRegion])
 
             specData = spectrum['DATA']
+            if gainDict:
+                feedwt = 1.0/gainDict[(str(spectrum['FDNUM']).strip(),
+                                       str(spectrum['PLNUM']).strip())]
+            else:
+                feedwt = 1.0
             if spectrum['OBJECT'] == 'VANE' or spectrum['OBJECT'] == 'SKY':
                 continue
             # baseline fit
@@ -614,7 +625,7 @@ def griddata(filelist,
             specData = channelShift(specData, -DeltaChan)
  
             outslice = (specData)[startChannel:endChannel]
-            spectrum_wt = np.isfinite(outslice).astype(np.float)
+            spectrum_wt = np.isfinite(outslice).astype(np.float) * feedwt
             outslice = np.nan_to_num(outslice)
             xpoints, ypoints, zpoints = w.wcs_world2pix(longCoord[idx],
                                                         latCoord[idx],
